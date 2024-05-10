@@ -1,22 +1,26 @@
 #!/usr/bin/env python
 """\
-Update /etc/hosts
+Update system hosts with hosts file from Steven Black GitHub repository:
+https://github.com/StevenBlack/hosts
 
-Usage: updateHosts.py [hosts_file]
+Usage: updateHosts.py [-h] [-v] [-f FILE] [-a ALLOW [ALLOW ...]] [-e EXTENSIONS]
 
-This script updates the hosts file on Fedora Linux:
-1. Download hosts file or read file given as arg
+options:
+  -f FILE 					  update from file
+  -a ALLOW [ALLOW ...]	  allow sites
+  -e EXTENSIONS  			  choose extensions: f, g, p, s
+
+
+This script updates the system hosts on Fedora Linux:
+1. Download hosts file or read from file
 2. Verify the integrity of the hosts file
 3. (optional) Save to disk
-              Update /etc/hosts 
+              Update system hosts 
               Restart NetworkManager to flush the DNS cache
-
-Download unified hosts file with all extensions from
-Steven Black GitHub repository:
-https://github.com/StevenBlack/hosts
 """
-# script by patrice houlet - 2023 - GPLv3
 
+# script by patrice houlet - 2024 - GPLv3
+__version__ = '1.1'
 
 import sys
 import os
@@ -28,64 +32,68 @@ from datetime import datetime
 import requests
 import dateutil.parser as dparser
 
-__version__ = '1.0'
 
-
-# detect Python 3.7 for version-dependent implementations
+# detect Python version
 PY37 = sys.version_info >= (3, 7)
-
 if not PY37:
    raise Exception('Python 3.7 or later required.')
       
 # sudo command
 SUDO = ["/usr/bin/env", "sudo"]
 
-# hosts files database
-hosts_dir = "hosts"
+# hosts file
+hosts = '/etc/hosts'
 
-# ghsb hosts file
+# hosts file database directory
+database = "hosts"
+
+# basename for hosts file saved to database
+basename = "hosts"
+
+# latest hosts file
 hosts_latest = "hosts_latest"
 
-# include extensions
-extensions = "fakenews-gambling-porn-social"
+# available extensions
+extensions = {'f': 'fakenews', 'g': 'gambling', 'p': 'porn', 's': 'social'}
 
-# raw hosts link
-url = f"https://raw.githubusercontent.com/StevenBlack/hosts/master/alternates/{extensions}/hosts"
+# hosts urls
+urls = "https://raw.githubusercontent.com/StevenBlack/hosts/master/alternates/{extensions}/hosts"
 
 
 # command-line arguments
-parser = argparse.ArgumentParser(description="Download hosts file and update /etc/hosts")
+parser = argparse.ArgumentParser(description=f"Update system hosts with hosts file from Steven Black GitHub repository")
 parser.add_argument('-v', '--version', action='version', version=f'%(prog)s {__version__}')
-parser.add_argument('hosts_file', nargs='?', help='hosts file')
-
-# get args
-args = parser.parse_args()
+parser.add_argument('-f', '--file', nargs=1, help='hosts file')
+parser.add_argument('-a', '--allow', nargs='+', help='allow sites')
+parser.add_argument('-e', '--extensions', nargs=1, help='extensions: f, g, p, s')
 
 
 def main():
+   # get args
+   args = parser.parse_args()
 
    # read data
-   if args.hosts_file is None:
+   if args.file is None:
+      # get extensions
+      ext = [extensions[e] for e in extensions if args.extensions is None or e in args.extensions[0]]
+      # set url
+      url = urls.format(extensions='-'.join(ext))
       # download latest unified hosts file with extensions
+      print(f"# Reading data from: \n{url}")
       data = get_hosts_file(url)
    else:
       # read hosts file from disk
-      data = read_hosts_file(args.hosts_file)
-   
-   # set filename prefix for saving hosts to database
-   if args.hosts_file is None:
-      basename = "hosts-ghsb"
-   else:
-      basename = "hosts"
-      
+      print(f"# Reading data from: \n{args.file[0]}")
+      data = read_hosts_file(args.file[0])
+
    # get hosts file date
    hdate, pdate = get_hosts_date(data)
    print(pdate[2:])
 
-   # verify if hosts file is up to date
-   if os.path.isfile(hosts_latest):
-      if hdate <= get_hosts_date(read_hosts_file(hosts_latest))[0]:
-         print("Hosts file is up to date.\nNothing to do.")
+   # check if hosts file is up to date
+   if os.path.isfile(hosts):
+      if hdate <= get_hosts_date(read_hosts_file(hosts))[0]:
+         print(f"{hosts} is up to date.\nNothing to do.")
          exit(0)
    
    # calculate the number of unique domains
@@ -106,41 +114,52 @@ def main():
    size = len("\n".join(data)+"\n")
    print(f"Number of lines: {len(data):,.0f}   size: {size:,.0f} bytes")
 
-   # get compromised or non-valid hosts lines
+	# allow sites (remove them from hosts)
+   if args.allow != None:
+      allow_sites(data, args.allow)
+	
+   # get non-valid hosts lines
    bad_data = get_bad_lines(data)
 
-   # remove compromised or non-valid lines from hosts file
+   # remove non-valid hosts lines
    if bad_data != []:
       clean_data(data, bad_data)
       # calculate and write the number of unique domains
-      nc = calculate_nud(data)
-      write_nud(data, nc)
+      nud = calculate_nud(data)
+      write_nud(data, nud)
    
    # save hosts file,
-   # update /etc/hosts and 
+   # update system hosts and 
    # flush the DNS cache
-   if re.search(r'^y(es)?$', input("#\nUpdate /etc/hosts (y/N)?").lower()):
+   if re.search(r'^y(es)?$', input(f"#\nUpdate {hosts} (y/N)?").lower()):
       # restore loopback entries of the original Fedora hosts file
       restore_org_le(data)
       
       # save to hosts database
-      new_hosts = f"{basename}-{hdate}"
-      path = f"{hosts_dir}/{new_hosts}"
+      path = os.path.join(f"{database}", f"{basename}-{hdate}")
       
-      print(f"# Save hosts to {path}")
+      print(f"# Saving to {path}")
       save_hosts("\n".join(data)+"\n", path)
       
       # save to hosts-latest
-      print(f"# Save hosts to {hosts_latest}")
+      print(f"# Saving to {hosts_latest}")
       save_hosts("\n".join(data)+"\n", hosts_latest)
 
-      # update /etc/hosts
-      print("# Update /etc/hosts")
-      update_hosts(hosts_latest)
+      # update system hosts
+      print(f"# Updating {hosts}")
+      try:
+         subprocess.run(SUDO + ['cp', hosts_latest, hosts], check=True)
+      except subprocess.CalledProcessError as e:
+         e.add_note(f">>> error updating {hosts} from {hosts_latest}")
+      raise
 
       # flush the DNS cache
-      print("# Restart NetworkManager")
-      flush_dns_cache()
+      print("# Restarting NetworkManager")
+      try:
+         subprocess.run(SUDO + ['/usr/bin/systemctl', 'restart', 'NetworkManager.service'])
+      except Exception as e:
+         e.add_note(">>> error restarting NetworkManager service")
+         raise
 
       print("Completed.")
    else:
@@ -188,7 +207,6 @@ def get_hosts_date(data):
    """
 
    prog = re.compile('^# Date: .+$')
-
    pdate = next((s for s in data if prog.search(s)), None)
    if pdate is None:
       raise ValueError(">>> could not read date from hosts file")
@@ -199,15 +217,15 @@ def get_hosts_date(data):
 
 
 def calculate_nud(data):
-   """Calculate the number of unique domains in the host file.
+   """Calculate the number of unique domains in the hosts file.
    Args:
       data: hosts file lines as list of strings
    Returns:
-      nc: the number of unique domains
+      nud: the number of unique domains
    """
    prog = re.compile(patterns('hl'))
-   nc = sum(1 for line in data if prog.search(line))
-   return nc
+   nud = sum(1 for line in data if prog.search(line))
+   return nud
    
    
 def read_nud(data):
@@ -215,7 +233,7 @@ def read_nud(data):
    Args:
       data: hosts file lines as list of strings
    Returns:
-      nr: the number of unique domains
+      nud: the number of unique domains
       line: the full text line
    """
    
@@ -223,50 +241,70 @@ def read_nud(data):
    line = next((s for s in data if prog.search(s)), None)
    
    if line is not None:
-      nr = int(re.sub(",", "", prog.search(line).group(1)))
+      nud = int(re.sub(",", "", prog.search(line).group(1)))
    else:
-      nr = None
+      nud = None
       
-   return nr, line[2:]
+   return nud, line[2:]
       
 
-def write_nud(data, nc):
+def write_nud(data, nud):
    """Write the number of unique domains to data.
    Args:
       data: hosts file lines as list of strings
-      nc: the number of unique domains
+      nud: the number of unique domains
    """
 
    prog = re.compile(patterns('nud'))
    i, s = next(((i, s) for i, s in enumerate(data) if prog.search(s)), (None, None))
 
    if i is not None:
-      data[i] = re.sub(r' [0-9,]{3,7}$', rf' {nc:,.0f}', s)
+      data[i] = re.sub(r' [0-9,]{3,7}$', rf' {nud:,.0f}', s)
       print(data[i][2:])
    else:
       raise ValueError('line with number of unique domains not found')
 
 
+def allow_sites(data, sites):
+	"""remove domains for allowed sites
+   Args:
+      data: hosts file lines as list of strings
+   Returns:
+      sites: allowed sites
+   """
+
+	print("# Allowing sites:")
+	for site in sites:
+		s = '# ' + site
+		if s in data:
+			i = data.index(s)
+			j = i + 1
+			while data[j] != '':
+				j += 1
+			del data[i:j+1]
+			print(f"{j-i-1} domains removed for {site}")
+	
+	
 def get_bad_lines(data):
    """Verify integrity of the hosts file
    Args:
       data: hosts file lines as list of strings
    Returns:
-      bad_data: compromised or non-valid hosts lines as list of strings
+      bad_data: non-valid hosts lines as list of strings
    """
 
    # get compromised or non-valid hosts lines
    prog = re.compile(patterns('xhl'))
    bad_data = [(i, line) for i, line in enumerate(data) if prog.search(line)]
    
-   print("# Verify hosts file integrity: ", end="")
+   print("# Verifying hosts file integrity: ", end="")
    
    if bad_data != []:
       print()
       print(">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>")
       print(">>>>>>>>>>            Security Warning            >>>>>>>>>>")
       print(">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>")
-      print(f">>> Problematic lines = {len(bad_data)}")
+      print(f">>> Non-valid lines = {len(bad_data)}")
       print("\n".join(f"{i}: {line}" for i, line in bad_data))
       print(">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>")
    else:
@@ -279,10 +317,10 @@ def clean_data(data, bad_data):
    """Remove bad lines
    Args:
       data: hosts file lines as list of strings
-      bad_data: problematic hosts lines as list of strings
+      bad_data: non-valid hosts lines as list of strings
    """
 
-   print("# Clean data:")
+   print("# Cleaning data:")
    
    # accepted hosts line: keep subdomains with '_'
    prog = re.compile(patterns('ahl'))
@@ -344,39 +382,18 @@ def save_hosts(data, path):
          raise
 
 
-def update_hosts(hosts_latest):
-   """Update /etc/hosts
-   Args:
-      hosts_latest: file to update from
-   """
-   
-   try:
-      subprocess.run(SUDO + ['cp', hosts_latest, '/etc/hosts'], check=True)
-   except subprocess.CalledProcessError as e:
-      e.add_note(f">>> error updating /etc/hosts from {hosts_latest}")
-      raise
-         
-
-def flush_dns_cache():
-   """Restart NetworkManager to flush the DNS cache"""
-   try:
-      subprocess.run(SUDO + ['/usr/bin/systemctl', 'restart', 'NetworkManager.service'])
-   except Exception as e:
-      e.add_note(">>> error restarting NetworkManager service")
-      raise
-         
-         
 def patterns(pattern):
    """Returns regular expression pattern.
    Args:
       pattern:
-         'd': domain
-         'd2': domain2
+         'd':   domain
+         'd2':  domain2
          'ip4': ipv4
-         'c': comment
+         'c':   comment
          'xhl': non-valid hosts line
          'ahl': accepted hosts line (subdomain with '_')
-         'hl': hosts line
+         'hl':  hosts line
+         'nud': number of unique domains
       str: string to scan
    Returns:
       regular expression pattern
@@ -394,21 +411,21 @@ def patterns(pattern):
    # https://www.rfc-editor.org/rfc/rfc3696#section-5
 
    # valid domain for a hosts file
-   domain = ('(?![^ ]{256,})'
-             '(?:(?!-)[a-z0-9-]{1,63}(?<!-)\.){1,126}'
-             '(?![0-9]+( |\t|$))(?!-)[a-z0-9-]{2,63}(?<!-)')
+   domain = (r'(?![^ ]{256,})'
+             r'(?:(?!-)[a-z0-9-]{1,63}(?<!-)\.){1,126}'
+             r'(?![0-9]+( |\t|$))(?!-)[a-z0-9-]{2,63}(?<!-)')
    p['d'] = domain
    
    # valid subdomains with '_'
-   domain2 = ('(?![^ ]{256,})(?!(?:.+?\.){127,})'
-              '(?:(?!-)[a-z0-9-_]{1,63}(?<!-)\.){0,125}'
-              '(?:(?!-)[a-z0-9-]{1,63}(?<!-)\.){1,126}'
-              '(?![0-9]+( |\t|$))(?!-)[a-z0-9-]{2,63}(?<!-)')
+   domain2 = (r'(?![^ ]{256,})(?!(?:.+?\.){127,})'
+              r'(?:(?!-)[a-z0-9-_]{1,63}(?<!-)\.){0,125}'
+              r'(?:(?!-)[a-z0-9-]{1,63}(?<!-)\.){1,126}'
+              r'(?![0-9]+( |\t|$))(?!-)[a-z0-9-]{2,63}(?<!-)')
    p['d2'] = domain2
    
    # valid ipv4 address
-   ipv4 = ('(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}'
-           '(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)')
+   ipv4 = (r'(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}'
+           r'(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)')
    p['ip4'] = ipv4
    
    # valid comment
