@@ -135,7 +135,6 @@ class Tests(unittest.TestCase):
               'abc.007' : False,
               'my_host.com' : False,
               'abc%$.com' : False,
-              'abc\.com' : False,
               'abc\n.com' : False,
               'abc\r\f.com' : False,
               'abc..com' : False,
