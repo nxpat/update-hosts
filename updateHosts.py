@@ -41,6 +41,9 @@ if not PY37:
 # sudo command
 SUDO = ["/usr/bin/env", "sudo"]
 
+# flush DNS cache command
+FLUSHDNS = ['/usr/bin/systemctl', 'restart', 'NetworkManager.service']
+
 # hosts file
 hosts = '/etc/hosts'
 
@@ -156,7 +159,7 @@ def main():
       # flush the DNS cache
       print("# Restarting NetworkManager")
       try:
-         subprocess.run(SUDO + ['/usr/bin/systemctl', 'restart', 'NetworkManager.service'])
+         subprocess.run(SUDO + FLUSHDNS)
       except Exception as e:
          e.add_note(">>> error restarting NetworkManager service")
          raise
@@ -470,3 +473,4 @@ def patterns(pattern):
    
 if __name__ == "__main__":
    main()
+	
